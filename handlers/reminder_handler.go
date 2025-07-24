@@ -48,3 +48,33 @@ func ReminderHandler(w http.ResponseWriter, r *http.Request) {
 		"period":  req.Period,
 	})
 }
+
+func GetReminderPeriodHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramIDStr := r.URL.Query().Get("telegram_id")
+	if telegramIDStr == "" {
+		http.Error(w, "telegram_id is required", http.StatusBadRequest)
+		return
+	}
+
+	telegramID, err := strconv.ParseInt(telegramIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid telegram_id", http.StatusBadRequest)
+		return
+	}
+
+	period, err := db.GetReminderPeriod(telegramID)
+	if err != nil {
+		http.Error(w, "Failed to get reminder period: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"period": period,
+	})
+}

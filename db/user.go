@@ -30,6 +30,12 @@ func GetUsersWithReminderPeriod() ([]UserReminder, error) {
 	return users, nil
 }
 
+func GetReminderPeriod(telegramID int64) (int, error) {
+	var period int
+	err := DB.QueryRow(`SELECT reminder_period FROM users WHERE telegram_id = $1`, telegramID).Scan(&period)
+	return period, err
+}
+
 func CreateUser(telegramID int64) error {
 	_, err := DB.Exec("INSERT INTO users (telegram_id) VALUES ($1)", telegramID)
 	if err != nil {

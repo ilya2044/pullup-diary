@@ -53,8 +53,12 @@ func SetHandler(w http.ResponseWriter, r *http.Request) {
 
 	dayID, err := db.GetWorkoutDayIDByUserIDAndDate(userID, date)
 	if err != nil {
-		http.Error(w, "Тренировочный день не найден", http.StatusBadRequest)
-		return
+		day, err := db.CreateWorkoutDay(userID, date)
+		if err != nil {
+			http.Error(w, "Ошибка при создании тренировочного дня", http.StatusInternalServerError)
+			return
+		}
+		dayID = day.ID
 	}
 
 	set, err := db.AddSet(dayID, req.Reps, req.Note)

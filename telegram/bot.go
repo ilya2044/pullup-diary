@@ -24,26 +24,34 @@ var (
 )
 
 func startReminderLoop(bot *tgbotapi.BotAPI) {
-	go func() {
-		for {
-			users, err := db.GetUsersWithReminderPeriod()
-			if err != nil {
-				log.Println("Ошибка получения пользователей для напоминаний:", err)
-				time.Sleep(1 * time.Minute)
-				continue
-			}
+	users, err := db.GetUsersWithReminderPeriod()
+	if err != nil {
+		log.Println("Ошибка при инициализации напоминаний:", err)
+		return
+	}
 
-			for _, user := range users {
-				msg := tgbotapi.NewMessage(user.TelegramID, "Напоминание")
-				_, err := bot.Send(msg)
-				if err != nil {
-					log.Printf("Ошибка отправки напоминания пользователю %d: %v", user.TelegramID, err)
-				}
+	for _, user := range users {
+		go startUserReminder(bot, user.TelegramID)
+	}
+}
 
-				time.Sleep(time.Duration(user.ReminderPeriod) * time.Minute)
-			}
+func startUserReminder(bot *tgbotapi.BotAPI, telegramID int64) {
+	for {
+		period, err := db.GetReminderPeriod(telegramID)
+		if err != nil {
+			log.Printf("Ошибка получения reminder_period для %d: %v", telegramID, err)
+			time.Sleep(1 * time.Minute)
+			continue
 		}
-	}()
+
+		time.Sleep(time.Duration(period) * time.Minute)
+
+		msg := tgbotapi.NewMessage(telegramID, "Напоминание")
+		_, err = bot.Send(msg)
+		if err != nil {
+			log.Printf("Ошибка отправки напоминания пользователю %d: %v", telegramID, err)
+		}
+	}
 }
 
 func setUserState(userID int64, state string) {
@@ -78,39 +86,39 @@ func registerUser(telegramID int64) error {
 	return nil
 }
 
-// func createWorkoutDay(telegramID int64, date string) error {
-// 	reqBody := map[string]interface{}{
-// 		"telegram_id": telegramID,
-// 		"date":        date,
-// 	}
-// 	data, _ := json.Marshal(reqBody)
-// 	resp, err := http.Post(apiBaseURL+"/workout_day", "application/json", bytes.NewBuffer(data))
-// 	if err != nil {
-// 		return err
-// 	}
-// 	defer resp.Body.Close()
-// 	if resp.StatusCode != http.StatusCreated {
-// 		return fmt.Errorf("не удалось создать тренировочный день, статус: %d", resp.StatusCode)
-// 	}
-// 	return nil
-// }
+func createWorkoutDay(telegramID int64, date string) error {
+	reqBody := map[string]interface{}{
+		"telegram_id": telegramID,
+		"date":        date,
+	}
+	data, _ := json.Marshal(reqBody)
+	resp, err := http.Post(apiBaseURL+"/workout_day", "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("не удалось создать тренировочный день, статус: %d", resp.StatusCode)
+	}
+	return nil
+}
 
-// func getWorkoutDays(telegramID int64) ([]map[string]interface{}, error) {
-// 	resp, err := http.Get(fmt.Sprintf("%s/workout_days?telegram_id=%d", apiBaseURL, telegramID))
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	defer resp.Body.Close()
+func getWorkoutDays(telegramID int64) ([]map[string]interface{}, error) {
+	resp, err := http.Get(fmt.Sprintf("%s/workout_days?telegram_id=%d", apiBaseURL, telegramID))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 
-// 	var result struct {
-// 		Data []map[string]interface{} `json:"data"`
-// 	}
-// 	err = json.NewDecoder(resp.Body).Decode(&result)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return result.Data, nil
-// }
+	var result struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	if err != nil {
+		return nil, err
+	}
+	return result.Data, nil
+}
 
 func addSet(telegramID int64, date string, reps int, note string) error {
 	reqBody := map[string]interface{}{
@@ -120,6 +128,8 @@ func addSet(telegramID int64, date string, reps int, note string) error {
 		"note":        note,
 	}
 	data, _ := json.Marshal(reqBody)
+	fmt.Println("Запрос:", string(data))
+
 	resp, err := http.Post(apiBaseURL+"/set", "application/json", bytes.NewBuffer(data))
 	if err != nil {
 		return err
@@ -129,6 +139,7 @@ func addSet(telegramID int64, date string, reps int, note string) error {
 		return fmt.Errorf("не удалось добавить подход, статус: %d", resp.StatusCode)
 	}
 	return nil
+
 }
 
 func getSets(telegramID int64) ([]map[string]interface{}, error) {
@@ -146,6 +157,24 @@ func getSets(telegramID int64) ([]map[string]interface{}, error) {
 		return nil, err
 	}
 	return result.Data, nil
+}
+
+func getReminderPeriod(telegramID int64) (int, error) {
+	resp, err := http.Get(fmt.Sprintf("%s/reminder_period?telegram_id=%d", apiBaseURL, telegramID))
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("server returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Period int `json:"period"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	return result.Period, err
 }
 
 func RunBot() {
@@ -193,7 +222,13 @@ func RunBot() {
 					tgbotapi.NewKeyboardButton("/reminder"),
 				),
 			)
-			msg := tgbotapi.NewMessage(chatID, "Выбери действие:")
+			msg := tgbotapi.NewMessage(
+				chatID,
+				`Выбери действие:
+			/sets - показать подходы
+			/reminder - поставить период напоминаний
+			/get_reminder - текущий период напоминаний`,
+			)
 			msg.ReplyMarkup = keyboard
 			bot.Send(msg)
 			clearUserState(userID)
@@ -232,22 +267,22 @@ func RunBot() {
 
 			clearUserState(userID)
 
-		// case strings.HasPrefix(text, "/days"):
-		// 	days, err := getWorkoutDays(userID)
-		// 	if err != nil {
-		// 		bot.Send(tgbotapi.NewMessage(chatID, "Ошибка при получении дней: "+err.Error()))
-		// 		continue
-		// 	}
-		// 	if len(days) == 0 {
-		// 		bot.Send(tgbotapi.NewMessage(chatID, "Тренировочные дни не созданы"))
-		// 		continue
-		// 	}
-		// 	var resp strings.Builder
-		// 	resp.WriteString("Тренировочные дни:\n")
-		// 	for _, day := range days {
-		// 		resp.WriteString(fmt.Sprintf("- %s\n", day["date"]))
-		// 	}
-		// 	bot.Send(tgbotapi.NewMessage(chatID, resp.String()))
+		case strings.HasPrefix(text, "/days"):
+			days, err := getWorkoutDays(userID)
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(chatID, "Ошибка при получении дней: "+err.Error()))
+				continue
+			}
+			if len(days) == 0 {
+				bot.Send(tgbotapi.NewMessage(chatID, "Тренировочные дни не созданы"))
+				continue
+			}
+			var resp strings.Builder
+			resp.WriteString("Тренировочные дни:\n")
+			for _, day := range days {
+				resp.WriteString(fmt.Sprintf("- %s\n", day["date"]))
+			}
+			bot.Send(tgbotapi.NewMessage(chatID, resp.String()))
 
 		case strings.HasPrefix(text, "/sets"):
 			sets, err := getSets(userID)
@@ -303,8 +338,16 @@ func RunBot() {
 			}
 			bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Период напоминаний установлен на %d минут", period)))
 
+		case strings.HasPrefix(text, "/get_reminder"):
+			period, err := getReminderPeriod(userID)
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(chatID, "Ошибка получения периода: "+err.Error()))
+				continue
+			}
+			bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Текущий период напоминаний: %d минут", period)))
+
 		default:
-			bot.Send(tgbotapi.NewMessage(chatID, "Неизвестная команда или сообщение. /start для меню"))
+			bot.Send(tgbotapi.NewMessage(chatID, "Неизвестная команда. /start для меню"))
 		}
 	}
 }

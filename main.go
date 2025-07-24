@@ -18,6 +18,7 @@ func main() {
 	http.HandleFunc("/set", handlers.SetHandler)
 	http.HandleFunc("/sets", handlers.GetSetHandler)
 	http.HandleFunc("/reminder", handlers.ReminderHandler)
+	http.HandleFunc("/reminder_period", handlers.GetReminderPeriodHandler)
 
 	go telegram.RunBot()
 
