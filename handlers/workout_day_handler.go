@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -9,8 +10,8 @@ import (
 )
 
 type CreateWorkoutDayRequest struct {
-	UserID int64  `json:"user_id"`
-	Date   string `json:"date"`
+	TelegramID int64  `json:"telegram_id"`
+	Date       string `json:"date"`
 }
 
 func WorkoutDayHandler(w http.ResponseWriter, r *http.Request) {
@@ -31,9 +32,15 @@ func WorkoutDayHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	day, err := db.CreateWorkoutDay(req.UserID, date)
+	userID, err := db.GetUserIDByTelegramID(req.TelegramID)
 	if err != nil {
-		http.Error(w, "Пользователь не зарегестрирован", http.StatusInternalServerError)
+		http.Error(w, "Пользователь не найден", http.StatusBadRequest)
+		return
+	}
+
+	day, err := db.CreateWorkoutDay(userID, date)
+	if err != nil {
+		http.Error(w, "Ошибка при создании тренировочного дня", http.StatusInternalServerError)
 		return
 	}
 
@@ -47,4 +54,49 @@ func WorkoutDayHandler(w http.ResponseWriter, r *http.Request) {
 			"date":    day.Date.Format("2006-01-02"),
 		},
 	})
+}
+
+func GetWorkoutDaysHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramIDStr := r.URL.Query().Get("telegram_id")
+	if telegramIDStr == "" {
+		http.Error(w, "telegram_id обязателен", http.StatusBadRequest)
+		return
+	}
+
+	telegramID, err := ParseInt64(telegramIDStr)
+	if err != nil {
+		http.Error(w, "Неверный telegram_id", http.StatusBadRequest)
+		return
+	}
+
+	days, err := db.GetWorkoutDaysByTelegramID(telegramID)
+	if err != nil {
+		http.Error(w, "Ошибка получения тренировочных дней", http.StatusInternalServerError)
+		return
+	}
+
+	respDays := make([]map[string]interface{}, 0, len(days))
+	for _, d := range days {
+		respDays = append(respDays, map[string]interface{}{
+			"id":      d.ID,
+			"user_id": d.UserID,
+			"date":    d.Date.Format("2006-01-02"),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data": respDays,
+	})
+}
+
+func ParseInt64(s string) (int64, error) {
+	var v int64
+	_, err := fmt.Sscan(s, &v)
+	return v, err
 }
