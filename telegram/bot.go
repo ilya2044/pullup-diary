@@ -19,8 +19,10 @@ import (
 const apiBaseURL = "http://localhost:8080"
 
 var (
-	userStates = make(map[int64]string)
-	stateMu    sync.Mutex
+	userStates  = make(map[int64]string)
+	stateMu     sync.Mutex
+	reminders   = make(map[int64]*time.Ticker)
+	remindersMu sync.Mutex
 )
 
 func startReminderLoop(bot *tgbotapi.BotAPI) {
@@ -31,27 +33,35 @@ func startReminderLoop(bot *tgbotapi.BotAPI) {
 	}
 
 	for _, user := range users {
-		go startUserReminder(bot, user.TelegramID)
+		startUserReminder(bot, user.TelegramID)
 	}
 }
 
 func startUserReminder(bot *tgbotapi.BotAPI, telegramID int64) {
-	for {
-		period, err := db.GetReminderPeriod(telegramID)
-		if err != nil {
-			log.Printf("Ошибка получения reminder_period для %d: %v", telegramID, err)
-			time.Sleep(1 * time.Minute)
-			continue
-		}
+	remindersMu.Lock()
+	defer remindersMu.Unlock()
 
-		time.Sleep(time.Duration(period) * time.Minute)
-
-		msg := tgbotapi.NewMessage(telegramID, "Напоминание")
-		_, err = bot.Send(msg)
-		if err != nil {
-			log.Printf("Ошибка отправки напоминания пользователю %d: %v", telegramID, err)
-		}
+	if ticker, exists := reminders[telegramID]; exists {
+		ticker.Stop()
 	}
+
+	period, err := db.GetReminderPeriod(telegramID)
+	if err != nil {
+		log.Printf("Ошибка получения периода для %d: %v", telegramID, err)
+		return
+	}
+
+	ticker := time.NewTicker(time.Duration(period) * time.Minute)
+	reminders[telegramID] = ticker
+
+	go func() {
+		for range ticker.C {
+			msg := tgbotapi.NewMessage(telegramID, "Напоминание")
+			if _, err := bot.Send(msg); err != nil {
+				log.Printf("Ошибка отправки напоминания %d: %v", telegramID, err)
+			}
+		}
+	}()
 }
 
 func setUserState(userID int64, state string) {
@@ -336,6 +346,9 @@ func RunBot() {
 				bot.Send(tgbotapi.NewMessage(chatID, "Ошибка при обновлении периода напоминаний"))
 				continue
 			}
+
+			startUserReminder(bot, userID)
+
 			bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Период напоминаний установлен на %d минут", period)))
 
 		case strings.HasPrefix(text, "/get_reminder"):
